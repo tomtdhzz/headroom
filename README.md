@@ -2,6 +2,8 @@
 
 **Per-model, rule-aware quota headroom for AI coding subscriptions.**
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 Most limit trackers flatten your subscription into a few plan-level percentages.
 `headroom` answers the question you actually have while coding:
 
@@ -17,6 +19,8 @@ left.
 `headroom` is **read-only**: it never changes your `omp` config or switches
 anything. It observes, forecasts, and alerts. (Auto-switching is a deliberate
 non-goal for v0 — see [Limitations](#limitations).)
+
+![headroom — interactive TUI (中文; press `l` to toggle 中/EN)](docs/assets/tui-zh.png)
 
 ## The problem it solves
 
