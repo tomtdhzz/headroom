@@ -57,18 +57,31 @@ Claude · f6* · max
 
 ## 安装
 
-从源码:
+### 预编译二进制 —— 推荐(免 clone、免 Rust)
+
+macOS / Linux,一行搞定:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tomtdhzz/headroom/releases/latest/download/headroom-installer.sh | sh
+```
+
+或从[最新 release](https://github.com/tomtdhzz/headroom/releases/latest)下载对应平台的 `.tar.xz`。
+
+> macOS 首次运行未签名二进制可能被 Gatekeeper 隔离。若被拦:
+> `xattr -dr com.apple.quarantine "$(command -v headroom)"`。
+
+### 用 cargo(需要 Rust 工具链)
+
+```bash
+cargo install --git https://github.com/tomtdhzz/headroom
+```
+
+### 从源码(兜底)
 
 ```bash
 git clone https://github.com/tomtdhzz/headroom
 cd headroom
-cargo install --path .
-```
-
-或不安装直接运行:
-
-```bash
-cargo run --release --
+cargo install --path .   # 或:cargo run --release -- …
 ```
 
 ## 使用

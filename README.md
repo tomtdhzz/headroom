@@ -79,18 +79,32 @@ ratatui, crossterm) are pure Rust and built by cargo.
 
 ## Install
 
-From source:
+### Prebuilt binary — recommended (no clone, no Rust)
+
+macOS / Linux, one line:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tomtdhzz/headroom/releases/latest/download/headroom-installer.sh | sh
+```
+
+Or download a `.tar.xz` for your platform from the
+[latest release](https://github.com/tomtdhzz/headroom/releases/latest).
+
+> macOS may quarantine an unsigned binary on first run. If Gatekeeper blocks it:
+> `xattr -dr com.apple.quarantine "$(command -v headroom)"`.
+
+### With cargo (needs the Rust toolchain)
+
+```bash
+cargo install --git https://github.com/tomtdhzz/headroom
+```
+
+### From source (fallback)
 
 ```bash
 git clone https://github.com/tomtdhzz/headroom
 cd headroom
-cargo install --path .
-```
-
-Or run without installing:
-
-```bash
-cargo run --release --
+cargo install --path .   # or: cargo run --release -- …
 ```
 
 ## Usage
