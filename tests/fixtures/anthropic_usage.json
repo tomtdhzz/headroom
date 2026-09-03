@@ -1,0 +1,110 @@
+{
+  "generatedAt": 1788438013331,
+  "reports": [
+    {
+      "provider": "anthropic",
+      "fetchedAt": 1788438006818,
+      "limits": [
+        {
+          "id": "anthropic:5h",
+          "label": "Claude 5 Hour",
+          "scope": {
+            "provider": "anthropic",
+            "windowId": "5h",
+            "shared": true
+          },
+          "window": {
+            "id": "5h",
+            "label": "5 Hour",
+            "durationMs": 18000000,
+            "resetsAt": 1788442200000
+          },
+          "amount": {
+            "used": 31,
+            "limit": 100,
+            "remaining": 69,
+            "usedFraction": 0.31,
+            "remainingFraction": 0.69,
+            "unit": "percent"
+          },
+          "status": "ok"
+        },
+        {
+          "id": "anthropic:7d",
+          "label": "Claude 7 Day",
+          "scope": {
+            "provider": "anthropic",
+            "windowId": "7d",
+            "shared": true
+          },
+          "window": {
+            "id": "7d",
+            "label": "7 Day",
+            "durationMs": 604800000,
+            "resetsAt": 1789009200000
+          },
+          "amount": {
+            "used": 9,
+            "limit": 100,
+            "remaining": 91,
+            "usedFraction": 0.09,
+            "remainingFraction": 0.91,
+            "unit": "percent"
+          },
+          "status": "ok"
+        },
+        {
+          "id": "anthropic:7d:fable",
+          "label": "Claude 7 Day (Fable)",
+          "scope": {
+            "provider": "anthropic",
+            "windowId": "7d",
+            "tier": "fable"
+          },
+          "window": {
+            "id": "7d",
+            "label": "7 Day",
+            "durationMs": 604800000
+          },
+          "amount": {
+            "used": 0,
+            "limit": 100,
+            "remaining": 100,
+            "usedFraction": 0,
+            "remainingFraction": 1,
+            "unit": "percent"
+          },
+          "status": "ok"
+        }
+      ],
+      "metadata": {
+        "accountId": "f6*",
+        "email": "ta*",
+        "orgId": "d2*",
+        "orgName": "Sh*",
+        "endpoint": "https://api.anthropic.com/api/oauth/usage",
+        "headersUpdatedAt": 1788438006818
+      }
+    }
+  ],
+  "accountsWithoutUsage": [],
+  "disabledCredentials": [],
+  "capacity": {
+    "anthropic": [
+      {
+        "window": "5h",
+        "durationMs": 18000000,
+        "accounts": 1,
+        "usedAccounts": 0.31,
+        "remainingAccounts": 0.69
+      },
+      {
+        "window": "7d",
+        "durationMs": 604800000,
+        "accounts": 1,
+        "usedAccounts": 0.09,
+        "remainingAccounts": 0.91
+      }
+    ]
+  }
+}
