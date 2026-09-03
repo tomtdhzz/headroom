@@ -1,6 +1,6 @@
 [package]
 name = "headroom"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.88"
 description = "Per-model, rule-aware quota headroom monitor for AI coding subscriptions (Claude / Codex via omp)"
