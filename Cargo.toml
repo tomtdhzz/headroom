@@ -7,6 +7,7 @@ description = "Per-model, rule-aware quota headroom monitor for AI coding subscr
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/tomtdhzz/headroom"
+homepage = "https://github.com/tomtdhzz/headroom"
 keywords = ["claude", "codex", "quota", "rate-limit", "omp"]
 categories = ["command-line-utilities"]
 
