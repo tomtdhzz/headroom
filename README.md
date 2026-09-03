@@ -79,6 +79,12 @@ ratatui, crossterm) are pure Rust and built by cargo.
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install tomtdhzz/tap/headroom
+```
+
 ### Prebuilt binary — recommended (no clone, no Rust)
 
 macOS / Linux, one line:

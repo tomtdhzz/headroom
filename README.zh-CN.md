@@ -57,6 +57,12 @@ Claude · f6* · max
 
 ## 安装
 
+### Homebrew(macOS / Linux)
+
+```bash
+brew install tomtdhzz/tap/headroom
+```
+
 ### 预编译二进制 —— 推荐(免 clone、免 Rust)
 
 macOS / Linux,一行搞定:
