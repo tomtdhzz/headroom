@@ -4,7 +4,7 @@
 //! Human-readable, localized wording lives in the delivery layer — the domain
 //! contains no display language.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use super::forecast::ExhaustionForecast;
 use super::headroom::Headroom;
@@ -80,6 +80,9 @@ pub struct Alert {
     pub bottleneck: String,
     /// Present for `DepletingSoon`.
     pub eta: Option<Duration>,
+    /// The bottleneck window's next reset instant, when known — the "window
+    /// refresh alarm" time point. Orthogonal to `kind`.
+    pub reset_at: Option<SystemTime>,
     pub suggestion: Option<Suggestion>,
 }
 
@@ -116,6 +119,7 @@ pub fn evaluate(
             bottleneck: hr.bottleneck.label.clone(),
             eta,
             suggestion: suggest_switch(hr, assessed),
+            reset_at: hr.bottleneck.resets_at,
         });
     }
 

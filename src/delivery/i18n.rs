@@ -2,6 +2,8 @@
 
 use crate::domain::{human_duration, Alert, AlertKind, AlertLevel};
 
+use super::ResetWhen;
+
 /// Supported display languages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Locale {
@@ -119,5 +121,60 @@ impl Locale {
                 Locale::Zh => format!("可切到 {class}(还剩 {left}%)"),
             }
         })
+    }
+
+    /// Localize a window-reset time point, e.g. `明天 08:00` / `tomorrow 08:00`.
+    pub(crate) fn reset_when_label(self, w: &ResetWhen) -> String {
+        let hm = |h: u32, m: u32| format!("{h:02}:{m:02}");
+        let weekday = |wd: u32| -> &'static str {
+            let en = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+            let zh = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+            let i = (wd % 7) as usize;
+            match self {
+                Locale::En => en[i],
+                Locale::Zh => zh[i],
+            }
+        };
+        match (self, *w) {
+            (_, ResetWhen::Today { hour, min }) => hm(hour, min),
+            (Locale::En, ResetWhen::Tomorrow { hour, min }) => {
+                format!("tomorrow {}", hm(hour, min))
+            }
+            (Locale::Zh, ResetWhen::Tomorrow { hour, min }) => format!("明天 {}", hm(hour, min)),
+            (_, ResetWhen::Weekday { wd, hour, min }) => {
+                format!("{} {}", weekday(wd), hm(hour, min))
+            }
+            (
+                _,
+                ResetWhen::Date {
+                    month,
+                    day,
+                    hour,
+                    min,
+                },
+            ) => {
+                format!("{month:02}-{day:02} {}", hm(hour, min))
+            }
+        }
+    }
+
+    /// Proactive "window refresh alarm" clause appended to an alert, given the
+    /// already-localized `when` label and a countdown string.
+    pub(crate) fn reset_note(self, a: &Alert, when: &str, countdown: &str) -> String {
+        let resumes = matches!(a.kind, AlertKind::Unavailable);
+        match (self, resumes) {
+            (Locale::En, true) => format!("resume {when} (↺{countdown})"),
+            (Locale::En, false) => format!("resets {when} (↺{countdown})"),
+            (Locale::Zh, true) => format!("{when} 恢复(↺{countdown})"),
+            (Locale::Zh, false) => format!("{when} 刷新(↺{countdown})"),
+        }
+    }
+
+    /// Watch-mode recovery ping: a previously-critical class is available again.
+    pub(crate) fn recovered_reason(self, subject: &str) -> String {
+        match self {
+            Locale::En => format!("{subject} refreshed — available now"),
+            Locale::Zh => format!("{subject} 已刷新，现在可用"),
+        }
     }
 }

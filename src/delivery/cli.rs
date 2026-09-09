@@ -9,7 +9,7 @@ use crate::app::evaluate::{AccountAssessment, Assessment};
 use crate::domain::human_duration;
 
 use super::i18n::Locale;
-use super::{bar, countdown, display_name, severity, truncate, worst_of, Sev};
+use super::{bar, countdown, display_name, reset_note, severity, truncate, worst_of, Sev};
 
 /// ANSI palette; `plain()` disables color for pipes / `NO_COLOR`.
 pub struct Palette {
@@ -70,7 +70,13 @@ impl Palette {
 }
 
 /// Render the whole assessment to a printable string in the given locale.
-pub fn render(assessment: &Assessment, now: SystemTime, p: &Palette, loc: Locale) -> String {
+pub fn render(
+    assessment: &Assessment,
+    now: SystemTime,
+    offset_secs: i32,
+    p: &Palette,
+    loc: Locale,
+) -> String {
     let mut out = String::new();
 
     if assessment.accounts.is_empty() {
@@ -102,14 +108,18 @@ pub fn render(assessment: &Assessment, now: SystemTime, p: &Palette, loc: Locale
                 .alert_suggestion(a)
                 .map(|s| format!(" · {s}"))
                 .unwrap_or_default();
+            let alarm = reset_note(a, now, offset_secs, loc)
+                .map(|s| format!(" · {s}"))
+                .unwrap_or_default();
             out.push_str(&format!(
-                "{}  {:<4} {}/{} — {}{}{}\n",
+                "{}  {:<4} {}/{} — {}{}{}{}\n",
                 color,
                 loc.level_tag(a.level),
                 display_name(a.provider.as_str()),
                 a.account,
                 loc.alert_reason(a),
                 suggestion,
+                alarm,
                 p.reset,
             ));
         }
@@ -242,6 +252,7 @@ mod tests {
         let text = render(
             &assessment(4),
             SystemTime::UNIX_EPOCH,
+            0,
             &Palette::plain(),
             Locale::En,
         );
@@ -258,6 +269,7 @@ mod tests {
         let text = render(
             &assessment(4),
             SystemTime::UNIX_EPOCH,
+            0,
             &Palette::plain(),
             Locale::Zh,
         );
@@ -272,9 +284,77 @@ mod tests {
         let text = render(
             &assessment(4),
             SystemTime::UNIX_EPOCH,
+            0,
             &Palette::ansi(),
             Locale::En,
         );
         assert!(text.contains("\x1b[1;31m"), "critical row should be red");
+    }
+
+    /// A depleted class surfaces the proactive window-refresh alarm: the local
+    /// wall-clock time it resumes, plus a countdown.
+    fn depleted_assessment(reset: SystemTime) -> Assessment {
+        let bottleneck = LimitWindow {
+            id: "7d:fable".into(),
+            label: "Claude 7 Day (Fable)".into(),
+            scope: LimitScope::Tier(Tier::new("fable")),
+            period: None,
+            remaining: Percent::new(0),
+            resets_at: Some(reset),
+            status: WindowStatus::Ok,
+        };
+        let hr = Headroom {
+            class: ModelClass::Tier(Tier::new("fable")),
+            effective_remaining: Percent::new(0),
+            bottleneck,
+            available: false,
+        };
+        let alerts = evaluate(
+            &ProviderId::new("anthropic"),
+            &AccountId::new("f6*"),
+            &[(hr.clone(), ExhaustionForecast::default())],
+            &Thresholds::default(),
+        );
+        Assessment {
+            accounts: vec![AccountAssessment {
+                snapshot: QuotaSnapshot {
+                    provider: ProviderId::new("anthropic"),
+                    account: AccountId::new("f6*"),
+                    plan: Some("max".into()),
+                    fetched_at: SystemTime::UNIX_EPOCH,
+                    windows: vec![],
+                },
+                classes: vec![ClassAssessment {
+                    headroom: hr,
+                    forecast: ExhaustionForecast::default(),
+                }],
+                alerts,
+            }],
+        }
+    }
+
+    #[test]
+    fn reset_alarm_shows_local_wall_clock_and_countdown() {
+        let now =
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20_000 * 86_400 + 12 * 3_600);
+        let reset =
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20_001 * 86_400 + 8 * 3_600);
+        let en = render(
+            &depleted_assessment(reset),
+            now,
+            0,
+            &Palette::plain(),
+            Locale::En,
+        );
+        assert!(en.contains("resume tomorrow 08:00"), "en alarm: {en}");
+        assert!(en.contains("↺20h"), "en countdown: {en}");
+        let zh = render(
+            &depleted_assessment(reset),
+            now,
+            0,
+            &Palette::plain(),
+            Locale::Zh,
+        );
+        assert!(zh.contains("明天 08:00 恢复"), "zh alarm: {zh}");
     }
 }

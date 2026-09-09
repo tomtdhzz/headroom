@@ -39,8 +39,10 @@ thing you need: **which model can I still use right now, and for how long?**
 
 `headroom` computes, per model, the **binding minimum** across every window that
 constrains it, names the **bottleneck**, shows a reset countdown and a burn-rate
-**ETA**, and — when a model is about to run out — tells you the cheaper model to
-switch to, **before** you hit the wall:
+**ETA**, tells you the cheaper model to switch to **before** you hit the wall,
+and — for a constrained model — the **exact local time its window refreshes**, a
+proactive *"resume at"* alarm so you can plan around the reset instead of
+passively waiting it out:
 
 ```
 Claude · f6* · max
@@ -48,11 +50,12 @@ Claude · f6* · max
   fable  [█░░░░░░░░░░░░░░░░░░░]   3%  Claude 7 Day (Fable)    ↺2d8h   ~36m
 
 alerts
-  CRIT  Claude/f6* — fable at 3% remaining (bottleneck: Claude 7 Day (Fable)) · switch to base (72% left)
+  CRIT  Claude/f6* — fable at 3% remaining (bottleneck: Claude 7 Day (Fable)) · switch to base (72% left) · resets Fri 09:00 (↺2d8h)
 ```
 
 Colored bar gauges, whole-row red on critical, an interactive TUI, and English or
-中文 — all read-only (see [Limitations](#limitations)).
+中文 — all read-only (see [Limitations](#limitations)). In `watch` mode a
+refreshed class also pings once ("available now") the moment its window resets.
 
 ## Prerequisites
 
@@ -213,6 +216,10 @@ cargo fmt --check
   single reading shows `-`.
 - **Windows may change.** Provider limit structures change often; the `scope`-driven
   mapping avoids hard-coding tiers, but new shapes may need a parser update.
+- **Refresh-alarm timezone.** The "resets at HH:MM" alarm renders in your local
+  wall-clock using the current UTC offset (read once from the OS). A reset that
+  falls across a daylight-saving boundary within the horizon may be off by an
+  hour; the relative countdown (`↺`) is always exact.
 
 ## Roadmap
 

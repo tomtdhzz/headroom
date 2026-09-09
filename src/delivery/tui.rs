@@ -18,7 +18,9 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use super::i18n::Locale;
-use super::{bar_filled, countdown, display_name, severity, truncate, worst_of, Sev, BAR_WIDTH};
+use super::{
+    bar_filled, countdown, display_name, reset_note, severity, truncate, worst_of, Sev, BAR_WIDTH,
+};
 use crate::app::evaluate::Assessment;
 use crate::app::Evaluator;
 use crate::domain::{human_duration, AlertLevel};
@@ -28,15 +30,17 @@ struct App {
     assessment: Assessment,
     selected: usize,
     updated: SystemTime,
+    offset_secs: i32,
     locale: Locale,
 }
 
 impl App {
-    fn new(assessment: Assessment, locale: Locale) -> Self {
+    fn new(assessment: Assessment, offset_secs: i32, locale: Locale) -> Self {
         App {
             assessment,
             selected: 0,
             updated: SystemTime::now(),
+            offset_secs,
             locale,
         }
     }
@@ -84,8 +88,14 @@ fn level_color(level: AlertLevel) -> Color {
 }
 
 /// Enter the alternate screen, run the event loop, and always restore.
-pub fn run(evaluator: &Evaluator, interval: Duration, auto: bool, locale: Locale) -> Result<()> {
-    let mut app = App::new(evaluator.poll()?, locale);
+pub fn run(
+    evaluator: &Evaluator,
+    interval: Duration,
+    auto: bool,
+    offset_secs: i32,
+    locale: Locale,
+) -> Result<()> {
+    let mut app = App::new(evaluator.poll()?, offset_secs, locale);
     let mut terminal = ratatui::init();
     let result = run_loop(&mut terminal, &mut app, evaluator, interval, auto);
     ratatui::restore();
@@ -249,14 +259,18 @@ fn build_lines(app: &App, now: SystemTime) -> Vec<Line<'static>> {
                 .alert_suggestion(a)
                 .map(|s| format!(" · {s}"))
                 .unwrap_or_default();
+            let alarm = reset_note(a, now, app.offset_secs, loc)
+                .map(|s| format!(" · {s}"))
+                .unwrap_or_default();
             lines.push(Line::from(Span::styled(
                 format!(
-                    "  {:<4} {}/{} — {}{}",
+                    "  {:<4} {}/{} — {}{}{}",
                     loc.level_tag(a.level),
                     display_name(a.provider.as_str()),
                     a.account,
                     loc.alert_reason(a),
-                    suggestion
+                    suggestion,
+                    alarm,
                 ),
                 Style::default().fg(level_color(a.level)),
             )));
@@ -332,6 +346,7 @@ mod tests {
             Assessment {
                 accounts: vec![account("anthropic", 72), account("openai-codex", 50)],
             },
+            0,
             Locale::En,
         );
         assert_eq!(app.selected, 0);
@@ -349,6 +364,7 @@ mod tests {
             Assessment {
                 accounts: vec![account("anthropic", 4)],
             },
+            0,
             Locale::Zh,
         );
         let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();

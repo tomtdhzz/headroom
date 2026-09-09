@@ -1,18 +1,20 @@
 //! Composition root: parse args, wire adapters into the use case, render, and
 //! (optionally) watch on an interval.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
 
-use headroom::adapters::{CliNotifier, FileHistoryStore, OmpUsageSource, SystemClock};
+use headroom::adapters::{
+    local_utc_offset_seconds, CliNotifier, FileHistoryStore, OmpUsageSource, Recovered, SystemClock,
+};
 use headroom::app::ports::Clock;
 use headroom::app::Evaluator;
 use headroom::delivery::cli::{render, Palette};
 use headroom::delivery::Locale;
-use headroom::domain::{Alert, Thresholds};
+use headroom::domain::{Alert, AlertLevel, Thresholds};
 
 const HELP: &str = "\
 headroom — per-model quota headroom for AI coding subscriptions (via omp)
@@ -137,8 +139,9 @@ fn run() -> Result<()> {
     let source = OmpUsageSource::new(args.provider.clone());
     let history = FileHistoryStore::new()?;
     let clock = SystemClock;
+    let offset_secs = local_utc_offset_seconds();
     let locale = args.lang.unwrap_or_else(Locale::detect);
-    let notifier = CliNotifier::new(args.desktop, locale);
+    let notifier = CliNotifier::new(args.desktop, offset_secs, locale);
     let thresholds = Thresholds {
         warn_pct: args.warn,
         critical_pct: args.critical,
@@ -152,61 +155,132 @@ fn run() -> Result<()> {
     };
 
     if args.tui {
-        headroom::delivery::tui::run(&evaluator, Duration::from_secs(args.interval), true, locale)?;
+        headroom::delivery::tui::run(
+            &evaluator,
+            Duration::from_secs(args.interval),
+            true,
+            offset_secs,
+            locale,
+        )?;
         return Ok(());
     }
 
     if args.watch {
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut state = WatchState::default();
         loop {
             run_once(
                 &evaluator,
                 &clock,
                 &notifier,
                 &palette,
+                offset_secs,
                 locale,
-                Some(&mut seen),
+                Some(&mut state),
             )?;
             std::thread::sleep(Duration::from_secs(args.interval));
         }
     } else {
-        run_once(&evaluator, &clock, &notifier, &palette, locale, None)?;
+        run_once(
+            &evaluator,
+            &clock,
+            &notifier,
+            &palette,
+            offset_secs,
+            locale,
+            None,
+        )?;
     }
     Ok(())
 }
 
-/// One poll + render + notify. In watch mode `seen` suppresses repeat alerts,
-/// notifying only newly appeared or escalated ones.
+/// Cross-poll watch state: suppressed alert signatures, plus the critical
+/// classes seen last poll (keyed by provider|account|subject) so we can fire a
+/// one-shot "refreshed" ping the moment one recovers.
+#[derive(Default)]
+struct WatchState {
+    seen: HashSet<String>,
+    crit: HashMap<String, Recovered>,
+}
+
+/// One poll + render + notify. In watch mode, suppresses repeat alerts (notifies
+/// only newly appeared/escalated) and emits a recovery ping for any critical
+/// class that has become available again since the previous poll.
 fn run_once(
     evaluator: &Evaluator,
     clock: &SystemClock,
     notifier: &CliNotifier,
     palette: &Palette,
+    offset_secs: i32,
     locale: Locale,
-    seen: Option<&mut HashSet<String>>,
+    state: Option<&mut WatchState>,
 ) -> Result<()> {
     use headroom::app::ports::Notifier;
 
     let assessment = evaluator.poll()?;
-    print!("{}", render(&assessment, clock.now(), palette, locale));
+    print!(
+        "{}",
+        render(&assessment, clock.now(), offset_secs, palette, locale)
+    );
 
     let alerts = assessment.alerts();
-    let to_notify: Vec<Alert> = match seen {
-        None => alerts,
-        Some(seen) => {
+    match state {
+        None => {
+            if !alerts.is_empty() {
+                notifier.notify(&alerts)?;
+            }
+        }
+        Some(state) => {
             let current: HashSet<String> = alerts.iter().map(signature).collect();
             let fresh: Vec<Alert> = alerts
-                .into_iter()
-                .filter(|a| !seen.contains(&signature(a)))
+                .iter()
+                .filter(|a| !state.seen.contains(&signature(a)))
+                .cloned()
                 .collect();
-            *seen = current;
-            fresh
+            state.seen = current;
+
+            // Recovery: critical classes present last poll, gone this poll.
+            let now_crit: HashMap<String, Recovered> = alerts
+                .iter()
+                .filter(|a| a.level == AlertLevel::Critical)
+                .map(|a| (crit_key(a), recovered_of(a)))
+                .collect();
+            let prev = std::mem::take(&mut state.crit);
+            let recovered = take_recovered(prev, &now_crit);
+            state.crit = now_crit;
+
+            if !fresh.is_empty() {
+                notifier.notify(&fresh)?;
+            }
+            if !recovered.is_empty() {
+                notifier.notify_recovery(&recovered);
+            }
         }
-    };
-    if !to_notify.is_empty() {
-        notifier.notify(&to_notify)?;
     }
     Ok(())
+}
+
+fn crit_key(a: &Alert) -> String {
+    format!("{}|{}|{}", a.provider, a.account, a.subject)
+}
+
+fn recovered_of(a: &Alert) -> Recovered {
+    Recovered {
+        provider: a.provider.clone(),
+        account: a.account.clone(),
+        subject: a.subject.clone(),
+    }
+}
+
+/// Critical classes present last poll but absent this poll — those that just
+/// recovered (window reset or freed). Consumes `prev`.
+fn take_recovered(
+    prev: HashMap<String, Recovered>,
+    now_crit: &HashMap<String, Recovered>,
+) -> Vec<Recovered> {
+    prev.into_iter()
+        .filter(|(k, _)| !now_crit.contains_key(k))
+        .map(|(_, r)| r)
+        .collect()
 }
 
 fn signature(a: &Alert) -> String {
@@ -217,4 +291,41 @@ fn signature(a: &Alert) -> String {
         a.subject,
         a.level.tag()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use headroom::domain::{AccountId, ProviderId};
+
+    fn crit(subject: &str) -> Recovered {
+        Recovered {
+            provider: ProviderId::new("anthropic"),
+            account: AccountId::new("f6*"),
+            subject: subject.into(),
+        }
+    }
+
+    #[test]
+    fn recovered_when_a_critical_class_disappears() {
+        let mut prev = HashMap::new();
+        prev.insert("anthropic|f6*|fable".to_string(), crit("fable"));
+        prev.insert("anthropic|f6*|base".to_string(), crit("base"));
+        // Only `base` is still critical this poll → `fable` recovered.
+        let mut now = HashMap::new();
+        now.insert("anthropic|f6*|base".to_string(), crit("base"));
+
+        let recovered = take_recovered(prev, &now);
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].subject, "fable");
+    }
+
+    #[test]
+    fn no_recovery_while_still_critical() {
+        let mut prev = HashMap::new();
+        prev.insert("anthropic|f6*|fable".to_string(), crit("fable"));
+        let mut now = HashMap::new();
+        now.insert("anthropic|f6*|fable".to_string(), crit("fable"));
+        assert!(take_recovered(prev, &now).is_empty());
+    }
 }
