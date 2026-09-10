@@ -133,9 +133,13 @@ pub fn parse_models(raw: &[u8]) -> Result<Vec<ModelRef>> {
         .into_iter()
         .map(|m| {
             let name = m.name.clone().unwrap_or_else(|| m.selector.clone());
+            // A 0 price is omp's placeholder for "unpriced", not a real free
+            // tier (e.g. open Gemma weights come through as all-zero cost). Map
+            // it to `None` so it renders as `-` and never wins the "cheapest"
+            // recommendation.
             let caps = ModelCaps {
-                cost_in: m.cost.as_ref().and_then(|c| c.input),
-                cost_out: m.cost.as_ref().and_then(|c| c.output),
+                cost_in: m.cost.as_ref().and_then(|c| c.input).filter(|&x| x > 0.0),
+                cost_out: m.cost.as_ref().and_then(|c| c.output).filter(|&x| x > 0.0),
                 context: m.context_window,
                 vision: m.input.iter().any(|i| i == "image"),
                 reasoning: m.reasoning,
@@ -196,6 +200,22 @@ mod tests {
         assert_eq!(models[1].name, "openai-codex/gpt-5.3-codex");
         assert_eq!(models[1].caps.cost_out, None);
         assert!(!models[1].caps.vision);
+    }
+
+    #[test]
+    fn zero_cost_is_treated_as_unpriced() {
+        // omp emits all-zero cost as a placeholder for unpriced models (e.g. open
+        // Gemma weights). That must map to `None`, not `$0`, so it renders `-`
+        // and never wins the "cheapest" recommendation.
+        let raw = br#"{"models":[
+            {"provider":"google","selector":"google/gemma-4-26b","name":"Gemma",
+             "input":["text","image"],"reasoning":true,
+             "cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}
+        ]}"#;
+        let models = parse_models(raw).unwrap();
+        assert_eq!(models[0].caps.cost_in, None);
+        assert_eq!(models[0].caps.cost_out, None);
+        assert!(models[0].caps.price_key().is_none());
     }
 
     #[test]

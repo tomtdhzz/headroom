@@ -621,11 +621,18 @@ fn node_line(row: NodeRow) -> Line<'static> {
         dot,
         Span::styled(format!("{:<40}", truncate(&row.text, 40)), sel_style),
     ];
-    if let Some(p) = row.price {
-        spans.push(Span::styled(
-            format!(" {p:>6}"),
-            Style::default().fg(price_color(row.tier)),
-        ));
+    if !row.is_auto {
+        // Real nodes always get a price cell; `-` means omp has no price for it.
+        match row.price {
+            Some(p) => spans.push(Span::styled(
+                format!(" {p:>6}"),
+                Style::default().fg(price_color(row.tier)),
+            )),
+            None => spans.push(Span::styled(
+                format!(" {:>6}", "-"),
+                Style::default().fg(Color::DarkGray),
+            )),
+        }
     }
     if !row.tags.is_empty() {
         spans.push(Span::styled(
