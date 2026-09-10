@@ -68,6 +68,48 @@ pub(crate) fn provider_severity(
     sev
 }
 
+/// Compact USD price, e.g. `$5`, `$0.5`, `$12.5` (no trailing zeros).
+pub(crate) fn fmt_price(n: f64) -> String {
+    if (n.fract()).abs() < 1e-9 {
+        format!("${}", n as i64)
+    } else {
+        let s = format!("{n:.2}");
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        format!("${s}")
+    }
+}
+
+/// Compact context-window size, e.g. `1M`, `400k`, `128k`.
+pub(crate) fn fmt_ctx(tokens: u32) -> String {
+    if tokens >= 1_000_000 {
+        let m = tokens as f64 / 1_000_000.0;
+        if (m.fract()).abs() < 1e-9 {
+            format!("{}M", m as i64)
+        } else {
+            format!("{m:.1}M")
+        }
+    } else if tokens >= 1_000 {
+        format!("{}k", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// Capability glyphs for a model: 👁 vision (reads images), 🧠 reasoning.
+pub(crate) fn caps_tags(caps: &crate::domain::ModelCaps) -> String {
+    let mut s = String::new();
+    if caps.vision {
+        s.push('👁');
+    }
+    if caps.reasoning {
+        if !s.is_empty() {
+            s.push(' ');
+        }
+        s.push('🧠');
+    }
+    s
+}
+
 /// The number of filled cells for a given remaining percentage.
 pub(crate) fn bar_filled(remaining: u8) -> usize {
     (((remaining as usize) * BAR_WIDTH + 50) / 100).min(BAR_WIDTH)

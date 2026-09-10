@@ -152,10 +152,10 @@ impl Locale {
     pub fn switch_footer(self) -> &'static str {
         match self {
             Locale::En => {
-                " ↑↓/jk model · ←→/Tab role · / filter · ⏎ apply · c clear · g back · q quit"
+                " ↑↓/jk model · ←→/Tab role · / filter · t sort · ⏎ apply · c clear · g back · q"
             }
             Locale::Zh => {
-                " ↑↓/jk 模型 · ←→/Tab 策略组 · / 过滤 · ⏎ 应用 · c 清除 · g 返回 · q 退出"
+                " ↑↓/jk 模型 · ←→/Tab 策略组 · / 过滤 · t 排序 · ⏎ 应用 · c 清除 · g 返回 · q 退出"
             }
         }
     }
@@ -189,6 +189,87 @@ impl Locale {
         match self {
             Locale::En => format!("`{query}` matches {n} models — be more specific"),
             Locale::Zh => format!("`{query}` 匹配到 {n} 个模型 —— 请更精确"),
+        }
+    }
+
+    /// Price label for a selected node's detail line: `in $5 · out $25`.
+    pub fn node_price(self, cost_in: Option<f64>, cost_out: Option<f64>) -> String {
+        use super::fmt_price;
+        let i = cost_in.map(fmt_price);
+        let o = cost_out.map(fmt_price);
+        match (self, i, o) {
+            (_, None, None) => match self {
+                Locale::En => "price n/a".into(),
+                Locale::Zh => "无报价".into(),
+            },
+            (Locale::En, i, o) => format!(
+                "in {} · out {}",
+                i.as_deref().unwrap_or("—"),
+                o.as_deref().unwrap_or("—")
+            ),
+            (Locale::Zh, i, o) => format!(
+                "输入 {} · 输出 {}",
+                i.as_deref().unwrap_or("—"),
+                o.as_deref().unwrap_or("—")
+            ),
+        }
+    }
+
+    /// Detail line for the "Auto" node.
+    pub fn auto_detail(self) -> &'static str {
+        match self {
+            Locale::En => "Auto — omp chooses the model for this role",
+            Locale::Zh => "自动 —— 该角色的模型交由 omp 选择",
+        }
+    }
+
+    /// Label for the context-window figure.
+    pub fn ctx_label(self) -> &'static str {
+        match self {
+            Locale::En => "ctx",
+            Locale::Zh => "上下文",
+        }
+    }
+
+    /// Recommendation labels (task → best model), backed by real capabilities.
+    pub fn rec_cheap(self) -> &'static str {
+        match self {
+            Locale::En => "cheapest",
+            Locale::Zh => "省",
+        }
+    }
+    pub fn rec_vision(self) -> &'static str {
+        match self {
+            Locale::En => "vision",
+            Locale::Zh => "看图",
+        }
+    }
+    pub fn rec_reasoning(self) -> &'static str {
+        match self {
+            Locale::En => "reasoning",
+            Locale::Zh => "推理",
+        }
+    }
+    pub fn rec_long(self) -> &'static str {
+        match self {
+            Locale::En => "long-ctx",
+            Locale::Zh => "长文",
+        }
+    }
+    pub fn recommend_prefix(self) -> &'static str {
+        match self {
+            Locale::En => "💡 pick",
+            Locale::Zh => "💡 推荐",
+        }
+    }
+
+    /// Sort-mode label for the switch footer.
+    pub fn sort_label(self, by_price: bool) -> &'static str {
+        match (self, by_price) {
+            (Locale::En, false) => "sort:name",
+            (Locale::En, true) => "sort:price",
+            (Locale::Zh, false) => "排序:名称",
+            (Locale::Zh, true) => "排序:价格",
         }
     }
 

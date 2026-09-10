@@ -19,12 +19,14 @@ use ratatui::{DefaultTerminal, Frame};
 
 use super::i18n::Locale;
 use super::{
-    bar_filled, countdown, display_name, provider_severity, reset_note, severity, truncate,
-    worst_of, Sev, BAR_WIDTH,
+    bar_filled, caps_tags, countdown, display_name, fmt_ctx, provider_severity, reset_note,
+    severity, truncate, worst_of, Sev, BAR_WIDTH,
 };
 use crate::app::evaluate::Assessment;
 use crate::app::{Evaluator, Outcome, Switcher};
-use crate::domain::{human_duration, AlertLevel, ModelRef, Role, RolePins};
+use crate::domain::{
+    human_duration, price_tier, top_for, AlertLevel, Fit, ModelRef, PriceTier, Role, RolePins,
+};
 
 /// Which pane is showing: the read-only gauges, or the switch (policy-group)
 /// pane where the user manually pins models to roles.
@@ -52,6 +54,7 @@ struct App {
     filter: String,
     filtering: bool,
     status: Option<String>,
+    sort_by_price: bool,
     loaded: bool,
 }
 
@@ -71,6 +74,7 @@ impl App {
             filter: String::new(),
             filtering: false,
             status: None,
+            sort_by_price: false,
             loaded: false,
         }
     }
@@ -79,19 +83,27 @@ impl App {
         Role::ALL[self.role_idx.min(Role::ALL.len() - 1)]
     }
 
-    /// Models matching the current filter (case-insensitive over selector+name).
+    /// Models matching the current filter (case-insensitive over selector+name),
+    /// optionally sorted cheapest-first (models without a price sort last).
     fn filtered(&self) -> Vec<&ModelRef> {
-        if self.filter.is_empty() {
-            return self.models.iter().collect();
-        }
         let q = self.filter.to_ascii_lowercase();
-        self.models
+        let mut out: Vec<&ModelRef> = self
+            .models
             .iter()
             .filter(|m| {
-                m.selector.to_ascii_lowercase().contains(&q)
+                q.is_empty()
+                    || m.selector.to_ascii_lowercase().contains(&q)
                     || m.name.to_ascii_lowercase().contains(&q)
             })
-            .collect()
+            .collect();
+        if self.sort_by_price {
+            out.sort_by(|a, b| {
+                let pa = a.caps.price_key().unwrap_or(f64::INFINITY);
+                let pb = b.caps.price_key().unwrap_or(f64::INFINITY);
+                pa.total_cmp(&pb).then(a.selector.cmp(&b.selector))
+            });
+        }
+        out
     }
 
     /// Total selectable rows in the node pane: the Auto row plus filtered models.
@@ -123,11 +135,13 @@ impl App {
     fn role_next(&mut self) {
         self.role_idx = (self.role_idx + 1) % Role::ALL.len();
         self.node_idx = 0;
+        self.status = None;
     }
 
     fn role_prev(&mut self) {
         self.role_idx = (self.role_idx + Role::ALL.len() - 1) % Role::ALL.len();
         self.node_idx = 0;
+        self.status = None;
     }
 
     fn node_next(&mut self) {
@@ -135,6 +149,7 @@ impl App {
         if n > 0 {
             self.node_idx = (self.node_idx + 1) % n;
         }
+        self.status = None;
     }
 
     fn node_prev(&mut self) {
@@ -142,6 +157,7 @@ impl App {
         if n > 0 {
             self.node_idx = (self.node_idx + n - 1) % n;
         }
+        self.status = None;
     }
 
     /// Apply the highlighted node to the current role: row 0 clears the pin
@@ -299,6 +315,10 @@ fn handle_key(
             KeyCode::Char('l') => app.locale = app.locale.toggle(),
             KeyCode::Char('r') => app.set(evaluator.poll()?),
             KeyCode::Char('/') => app.filtering = true,
+            KeyCode::Char('t') => {
+                app.sort_by_price = !app.sort_by_price;
+                app.node_idx = 0;
+            }
             KeyCode::Char('c') => {
                 app.node_idx = 0;
                 app.apply(switcher)?;
@@ -351,8 +371,9 @@ fn ui_gauges(frame: &mut Frame, app: &App) {
 /// provider's live quota.
 fn ui_switch(frame: &mut Frame, app: &App) {
     let loc = app.locale;
-    let [body, status, footer] = Layout::vertical([
+    let [body, detail, recs, footer] = Layout::vertical([
         Constraint::Min(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
@@ -367,11 +388,13 @@ fn ui_switch(frame: &mut Frame, app: &App) {
     );
     frame.render_widget(roles, left);
 
-    let title = if app.filter.is_empty() {
-        format!(" {} ", loc.nodes_heading())
-    } else {
-        format!(" {} · /{}", loc.nodes_heading(), app.filter)
-    };
+    let mut title = format!(" {} ", loc.nodes_heading());
+    if !app.filter.is_empty() {
+        title.push_str(&format!("· /{} ", app.filter));
+    }
+    if app.sort_by_price {
+        title.push_str(&format!("· {} ", loc.sort_label(true)));
+    }
     let node_lines = build_node_lines(app);
     let visible = right.height.saturating_sub(2) as usize; // minus borders
     let scroll = app
@@ -383,22 +406,87 @@ fn ui_switch(frame: &mut Frame, app: &App) {
         .scroll((scroll, 0));
     frame.render_widget(nodes, right);
 
-    let role = app.role();
-    let status_text = app.status.clone().unwrap_or_else(|| {
-        let pin = app.pins.get(role).unwrap_or(loc.unset());
-        format!("{} → {}", loc.role_label(role), pin)
-    });
-    let status_line = Paragraph::new(Line::from(Span::styled(
-        format!(" {status_text}"),
-        Style::default().fg(Color::Cyan),
-    )));
-    frame.render_widget(status_line, status);
+    // Detail of the highlighted node (price + caps) — the "预计花费" line.
+    let detail_text = node_detail(app);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {detail_text}"),
+            Style::default().fg(Color::Cyan),
+        ))),
+        detail,
+    );
 
-    let hint = Paragraph::new(Line::from(Span::styled(
-        loc.switch_footer(),
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(hint, footer);
+    // Task recommendations over the currently-filtered catalog.
+    frame.render_widget(Paragraph::new(recommend_line(app)), recs);
+
+    // Status (last action) or footer keys.
+    let footer_line = match &app.status {
+        Some(s) => Line::from(Span::styled(
+            format!(" {s}"),
+            Style::default().fg(Color::Green),
+        )),
+        None => Line::from(Span::styled(
+            loc.switch_footer(),
+            Style::default().fg(Color::DarkGray),
+        )),
+    };
+    frame.render_widget(Paragraph::new(footer_line), footer);
+}
+
+/// The detail line for the highlighted node: full price, context, and caps.
+fn node_detail(app: &App) -> String {
+    let loc = app.locale;
+    if app.node_idx == 0 {
+        return loc.auto_detail().to_string();
+    }
+    let filtered = app.filtered();
+    let Some(m) = filtered.get(app.node_idx - 1) else {
+        return String::new();
+    };
+    let mut parts = vec![
+        m.name.clone(),
+        loc.node_price(m.caps.cost_in, m.caps.cost_out),
+    ];
+    if let Some(ctx) = m.caps.context {
+        parts.push(format!("{} {}", fmt_ctx(ctx), loc.ctx_label()));
+    }
+    let tags = caps_tags(&m.caps);
+    if !tags.is_empty() {
+        parts.push(tags);
+    }
+    parts.join(" · ")
+}
+
+/// The recommendation line: best model per task axis, from real capabilities.
+fn recommend_line(app: &App) -> Line<'static> {
+    let loc = app.locale;
+    let models: Vec<ModelRef> = app.filtered().into_iter().cloned().collect();
+    let short = |sel: &str| sel.rsplit('/').next().unwrap_or(sel).to_string();
+    let mut spans = vec![Span::styled(
+        format!(" {}  ", loc.recommend_prefix()),
+        Style::default().fg(Color::Yellow),
+    )];
+    let axes = [
+        (Fit::Cheap, loc.rec_cheap()),
+        (Fit::Vision, loc.rec_vision()),
+        (Fit::Reasoning, loc.rec_reasoning()),
+        (Fit::LongContext, loc.rec_long()),
+    ];
+    let mut first = true;
+    for (fit, label) in axes {
+        if let Some(m) = top_for(&models, fit) {
+            if !first {
+                spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            }
+            spans.push(Span::styled(
+                format!("{label}:"),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::raw(short(&m.selector)));
+            first = false;
+        }
+    }
+    Line::from(spans)
 }
 
 fn build_role_lines(app: &App) -> Vec<Line<'static>> {
@@ -435,67 +523,88 @@ fn build_node_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     // Row 0: the "Auto" pseudo-node (clear the pin).
-    let auto_selected = app.node_idx == 0;
-    let auto_current = current.is_none();
-    lines.push(node_line(
-        loc.auto_node(),
-        "",
-        auto_selected,
-        auto_current,
-        None,
-        true,
-    ));
+    lines.push(node_line(NodeRow {
+        text: loc.auto_node().to_string(),
+        selected: app.node_idx == 0,
+        current: current.is_none(),
+        sev: None,
+        is_auto: true,
+        price: None,
+        tier: PriceTier::Unknown,
+        tags: String::new(),
+    }));
 
     for (j, m) in app.filtered().iter().enumerate() {
-        let selected = app.node_idx == j + 1;
-        let is_current = current == Some(m.selector.as_str());
-        let sev = provider_severity(&app.assessment, m.provider.as_str());
-        lines.push(node_line(
-            &m.selector,
-            &m.name,
-            selected,
-            is_current,
-            sev,
-            false,
-        ));
+        let price = m.caps.cost_out.or(m.caps.cost_in).map(super::fmt_price);
+        lines.push(node_line(NodeRow {
+            text: m.selector.clone(),
+            selected: app.node_idx == j + 1,
+            current: current == Some(m.selector.as_str()),
+            sev: provider_severity(&app.assessment, m.provider.as_str()),
+            is_auto: false,
+            price,
+            // Tier terciles over the *whole* catalog, so "cheap" is absolute.
+            tier: price_tier(&app.models, m),
+            tags: caps_tags(&m.caps),
+        }));
     }
     lines
 }
 
-fn node_line(
-    text: &str,
-    name: &str,
+/// One rendered node row's inputs.
+struct NodeRow {
+    text: String,
     selected: bool,
     current: bool,
     sev: Option<Sev>,
     is_auto: bool,
-) -> Line<'static> {
-    let mark = if selected { "▶ " } else { "  " };
+    price: Option<String>,
+    tier: PriceTier,
+    tags: String,
+}
+
+fn price_color(tier: PriceTier) -> Color {
+    match tier {
+        PriceTier::Cheap => Color::Green,
+        PriceTier::Mid => Color::Gray,
+        PriceTier::Pricey => Color::Magenta,
+        PriceTier::Unknown => Color::DarkGray,
+    }
+}
+
+fn node_line(row: NodeRow) -> Line<'static> {
+    let mark = if row.selected { "▶ " } else { "  " };
     // Current-pin marker (distinct from the health dot to avoid ●● collisions).
-    let cur = if current { "✓ " } else { "  " };
+    let cur = if row.current { "✓ " } else { "  " };
     // Health dot: colored for real nodes with live quota; blank for the Auto row.
-    let dot: Span<'static> = if is_auto {
+    let dot: Span<'static> = if row.is_auto {
         Span::raw("  ")
     } else {
-        let color = sev.map(sev_color).unwrap_or(Color::DarkGray);
+        let color = row.sev.map(sev_color).unwrap_or(Color::DarkGray);
         Span::styled("● ", Style::default().fg(color))
     };
     let mut sel_style = Style::default();
-    if current {
+    if row.current {
         sel_style = sel_style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
     }
-    if selected {
+    if row.selected {
         sel_style = sel_style.add_modifier(Modifier::REVERSED);
     }
     let mut spans = vec![
         Span::raw(mark),
         Span::styled(cur, Style::default().fg(Color::Cyan)),
         dot,
-        Span::styled(truncate(text, 52), sel_style),
+        Span::styled(format!("{:<40}", truncate(&row.text, 40)), sel_style),
     ];
-    if !name.is_empty() && name != text {
+    if let Some(p) = row.price {
         spans.push(Span::styled(
-            format!("  {}", truncate(name, 28)),
+            format!(" {p:>6}"),
+            Style::default().fg(price_color(row.tier)),
+        ));
+    }
+    if !row.tags.is_empty() {
+        spans.push(Span::styled(
+            format!("  {}", row.tags),
             Style::default().fg(Color::DarkGray),
         ));
     }

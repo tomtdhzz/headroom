@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::app::ports::ModelControl;
-use crate::domain::{ModelRef, ProviderId, Role, RolePins};
+use crate::domain::{ModelCaps, ModelRef, ProviderId, Role, RolePins};
 
 /// Drives the `omp` CLI to read the model catalog and read/write role pins.
 pub struct OmpModelControl {
@@ -104,6 +104,19 @@ struct ModelDto {
     provider: String,
     selector: String,
     name: Option<String>,
+    #[serde(rename = "contextWindow")]
+    context_window: Option<u32>,
+    #[serde(default)]
+    reasoning: bool,
+    #[serde(default)]
+    input: Vec<String>,
+    cost: Option<CostDto>,
+}
+
+#[derive(Deserialize)]
+struct CostDto {
+    input: Option<f64>,
+    output: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -119,8 +132,15 @@ pub fn parse_models(raw: &[u8]) -> Result<Vec<ModelRef>> {
         .models
         .into_iter()
         .map(|m| {
-            let name = m.name.unwrap_or_else(|| m.selector.clone());
-            ModelRef::new(ProviderId::new(m.provider), m.selector, name)
+            let name = m.name.clone().unwrap_or_else(|| m.selector.clone());
+            let caps = ModelCaps {
+                cost_in: m.cost.as_ref().and_then(|c| c.input),
+                cost_out: m.cost.as_ref().and_then(|c| c.output),
+                context: m.context_window,
+                vision: m.input.iter().any(|i| i == "image"),
+                reasoning: m.reasoning,
+            };
+            ModelRef::new(ProviderId::new(m.provider), m.selector, name).with_caps(caps)
         })
         .collect())
 }
@@ -158,15 +178,24 @@ mod tests {
     #[test]
     fn parses_model_catalog() {
         let raw = br#"{"models":[
-            {"provider":"anthropic","selector":"anthropic/claude-opus-4","name":"Claude Opus 4"},
+            {"provider":"anthropic","selector":"anthropic/claude-opus-4","name":"Claude Opus 4",
+             "contextWindow":1000000,"reasoning":true,"input":["text","image"],
+             "cost":{"input":5,"output":25,"cacheRead":0.5,"cacheWrite":6.25}},
             {"provider":"openai-codex","selector":"openai-codex/gpt-5.3-codex"}
         ]}"#;
         let models = parse_models(raw).unwrap();
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].provider.as_str(), "anthropic");
         assert_eq!(models[0].name, "Claude Opus 4");
-        // Missing name falls back to selector.
+        assert_eq!(models[0].caps.cost_in, Some(5.0));
+        assert_eq!(models[0].caps.cost_out, Some(25.0));
+        assert_eq!(models[0].caps.context, Some(1_000_000));
+        assert!(models[0].caps.vision);
+        assert!(models[0].caps.reasoning);
+        // Missing name falls back to selector; absent caps default to empty.
         assert_eq!(models[1].name, "openai-codex/gpt-5.3-codex");
+        assert_eq!(models[1].caps.cost_out, None);
+        assert!(!models[1].caps.vision);
     }
 
     #[test]

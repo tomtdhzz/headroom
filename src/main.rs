@@ -14,7 +14,7 @@ use headroom::adapters::{
 use headroom::app::ports::Clock;
 use headroom::app::{Evaluator, Outcome, Switcher};
 use headroom::delivery::cli::{render, Palette};
-use headroom::delivery::switch::{render_outcome, render_roles};
+use headroom::delivery::switch::{render_models, render_outcome, render_roles};
 use headroom::delivery::Locale;
 use headroom::domain::{Alert, AlertLevel, Role, Thresholds};
 
@@ -28,6 +28,7 @@ USAGE:
     headroom roles                     Show role→model pins (the policy groups)
     headroom use <role> <model>        Pin a role to a model (fuzzy match)
     headroom clear <role>              Clear a role's pin (back to omp default)
+    headroom models [--filter <s>]     List models with price + caps + recommendations
 
 ROLES: default · plan · slow · smol · advisor
 
@@ -54,6 +55,7 @@ enum Cmd {
     Roles,
     Use,
     Clear,
+    Models,
 }
 
 struct Args {
@@ -104,6 +106,8 @@ fn parse_args() -> Result<Option<Args>> {
                 args.cmd = Cmd::Clear;
                 args.role = Some(next_value(&mut it, "clear <role>")?);
             }
+            "models" => args.cmd = Cmd::Models,
+            "--filter" => args.query = Some(next_value(&mut it, "--filter")?),
             "--provider" => args.provider = Some(next_value(&mut it, "--provider")?),
             "--warn" => args.warn = parse_pct(&next_value(&mut it, "--warn")?, "--warn")?,
             "--critical" => {
@@ -193,6 +197,19 @@ fn run() -> Result<()> {
             let role = parse_role(args.role.as_deref().unwrap_or(""))?;
             let outcome = switcher.clear(role)?;
             println!("{}", render_outcome(&outcome, locale));
+            return Ok(());
+        }
+        Cmd::Models => {
+            let models = switcher.models()?;
+            print!(
+                "{}",
+                render_models(
+                    &models,
+                    args.provider.as_deref(),
+                    args.query.as_deref(),
+                    locale
+                )
+            );
             return Ok(());
         }
         Cmd::Show | Cmd::Watch | Cmd::Tui => {}

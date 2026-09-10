@@ -159,6 +159,9 @@ headroom use smol   haiku
 
 # Clear a pin, back to omp's default
 headroom clear default
+
+# List models with price + capabilities + task recommendations
+headroom models --provider anthropic --filter opus
 ```
 
 `use` / `clear` (and the TUI "apply") are the **only** actions that write
@@ -167,6 +170,19 @@ A switch takes effect on the **next omp session** (same as cc-switch; it never
 disturbs a running one). In the TUI switch pane, each node's color reflects that
 provider's **live headroom** (green/yellow/red), the current pin is marked `●`,
 and the `◎ Auto` row clears the pin (the URLTest analog — hand it back to omp).
+
+**See cost and fit while switching.** In the TUI switch pane each node shows its
+**price** (output $/M tokens; green=cheap, gray=mid, magenta=pricey) and
+capability tags (`👁` reads images, `🧠` reasoning); the highlighted node's full
+price (in/out) and context size appear below, and a **recommendation** line
+suggests the best model per task axis — `💡 cheapest / vision / reasoning /
+long-ctx` — all computed from real `omp models` fields. Press `t` to sort by
+price so the cheaper escape model surfaces on a quota alert.
+
+> Note: the price is omp's **API list price** ($/M tokens) — a *relative* cost
+> signal. On a subscription, switching models produces no dollar bill; real quota
+> burn is the pane's color (provider live headroom). `👁` means the model can
+> *read* images (vision), not generate them — these are coding models.
 
 Options:
 
@@ -242,7 +258,9 @@ cargo fmt --check
   `retry.usageAwareFallback` / `fallbackChains` for at-the-wall downgrade).
 - **Tier granularity.** `omp` exposes usage per tier, not per exact model, so
   headroom is computed per tier/class. Per-model attribution inside a shared pool
-  (e.g. Sonnet vs. Haiku) needs session accounting — planned for v2.
+  (e.g. Sonnet vs. Haiku) needs session accounting — planned for v2. The switch
+  pane's per-model **price** is omp's API list price (a relative cost signal), not
+  subscription-quota consumption — omp exposes no model→tier map to attribute that.
 - **Forecast needs history.** ETA appears only after ≥2 differing samples; a
   single reading shows `-`.
 - **Windows may change.** Provider limit structures change often; the `scope`-driven

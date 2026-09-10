@@ -68,14 +68,39 @@ impl fmt::Display for Role {
     }
 }
 
+/// Real capability + price metadata for a model, sourced from `omp models`.
+/// Prices are USD per 1M tokens (omp's list price — a *relative* cost signal;
+/// subscription quota is tracked separately by the usage windows).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelCaps {
+    pub cost_in: Option<f64>,
+    pub cost_out: Option<f64>,
+    /// Context window in tokens.
+    pub context: Option<u32>,
+    /// Accepts image input (vision) — good for screenshot/diagram-reading tasks.
+    pub vision: bool,
+    /// Exposes a reasoning/thinking mode — good for planning/hard problems.
+    pub reasoning: bool,
+}
+
+impl ModelCaps {
+    /// The price signal used for ranking: output price (dominant), else input.
+    /// `None` when the model has no price at all.
+    pub fn price_key(&self) -> Option<f64> {
+        self.cost_out.or(self.cost_in)
+    }
+}
+
 /// A concrete model that can back a role — the Clash "节点" analog.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModelRef {
     pub provider: ProviderId,
     /// The fully-qualified selector omp accepts, e.g. `anthropic/claude-opus-4`.
     pub selector: String,
     /// Human-friendly name, e.g. `Claude Opus 4`.
     pub name: String,
+    /// Price + capability metadata (default/empty when omp omits it).
+    pub caps: ModelCaps,
 }
 
 impl ModelRef {
@@ -84,7 +109,13 @@ impl ModelRef {
             provider,
             selector: selector.into(),
             name: name.into(),
+            caps: ModelCaps::default(),
         }
+    }
+
+    pub fn with_caps(mut self, caps: ModelCaps) -> Self {
+        self.caps = caps;
+        self
     }
 }
 
@@ -130,7 +161,7 @@ impl RolePins {
 }
 
 /// The outcome of resolving a free-text query against the model catalog.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Resolve {
     /// Exactly one model matched.
     Unique(ModelRef),
@@ -177,6 +208,75 @@ pub fn resolve_model(models: &[ModelRef], query: &str) -> Resolve {
         }
     }
     Resolve::None
+}
+
+/// A task-shaped recommendation axis, backed only by real `omp models` fields.
+/// (No "drawing/generation" axis — these are coding models; `vision` means they
+/// can *read* images, not create them.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fit {
+    /// Cheapest by list price — the quota-alert escape hatch.
+    Cheap,
+    /// Accepts image input (screenshots/diagrams).
+    Vision,
+    /// Exposes reasoning/thinking (planning, hard problems).
+    Reasoning,
+    /// Largest context window (big files, long chats).
+    LongContext,
+}
+
+/// The best model in `models` for `fit`, or `None` if nothing qualifies.
+/// Ties break toward the cheaper model, then the shorter selector (stable).
+pub fn top_for(models: &[ModelRef], fit: Fit) -> Option<&ModelRef> {
+    let cheapest = |a: &&ModelRef, b: &&ModelRef| {
+        let pa = a.caps.price_key().unwrap_or(f64::INFINITY);
+        let pb = b.caps.price_key().unwrap_or(f64::INFINITY);
+        pa.total_cmp(&pb)
+            .then(a.selector.len().cmp(&b.selector.len()))
+    };
+    match fit {
+        Fit::Cheap => models
+            .iter()
+            .filter(|m| m.caps.price_key().is_some())
+            .min_by(cheapest),
+        Fit::Vision => models.iter().filter(|m| m.caps.vision).min_by(cheapest),
+        Fit::Reasoning => models.iter().filter(|m| m.caps.reasoning).min_by(cheapest),
+        Fit::LongContext => models
+            .iter()
+            .filter(|m| m.caps.context.is_some())
+            .max_by_key(|m| m.caps.context.unwrap_or(0)),
+    }
+}
+
+/// Relative price bucket of a model within a catalog, by output-price terciles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PriceTier {
+    Cheap,
+    Mid,
+    Pricey,
+    Unknown,
+}
+
+/// Bucket `model`'s price against the `models` catalog (lower third = cheap,
+/// upper third = pricey). `Unknown` when the model has no price.
+pub fn price_tier(models: &[ModelRef], model: &ModelRef) -> PriceTier {
+    let Some(p) = model.caps.price_key() else {
+        return PriceTier::Unknown;
+    };
+    let mut prices: Vec<f64> = models.iter().filter_map(|m| m.caps.price_key()).collect();
+    if prices.len() < 3 {
+        return PriceTier::Mid;
+    }
+    prices.sort_by(f64::total_cmp);
+    let lo = prices[prices.len() / 3];
+    let hi = prices[prices.len() * 2 / 3];
+    if p <= lo {
+        PriceTier::Cheap
+    } else if p >= hi {
+        PriceTier::Pricey
+    } else {
+        PriceTier::Mid
+    }
 }
 
 #[cfg(test)]
@@ -249,5 +349,66 @@ mod tests {
     fn resolve_none_when_no_match() {
         assert_eq!(resolve_model(&catalog(), "gemini"), Resolve::None);
         assert_eq!(resolve_model(&catalog(), "  "), Resolve::None);
+    }
+
+    fn caps(cost_out: f64, ctx: u32, vision: bool, reasoning: bool) -> ModelCaps {
+        ModelCaps {
+            cost_in: Some(cost_out / 5.0),
+            cost_out: Some(cost_out),
+            context: Some(ctx),
+            vision,
+            reasoning,
+        }
+    }
+
+    fn priced_catalog() -> Vec<ModelRef> {
+        vec![
+            m("anthropic/claude-opus-4", "Opus").with_caps(caps(25.0, 1_000_000, true, true)),
+            m("anthropic/claude-haiku", "Haiku").with_caps(caps(4.0, 200_000, true, false)),
+            m("openai-codex/gpt-5", "GPT-5").with_caps(caps(10.0, 400_000, false, true)),
+            m("anthropic/claude-text", "Text").with_caps(caps(1.0, 100_000, false, false)),
+        ]
+    }
+
+    #[test]
+    fn top_for_picks_by_axis() {
+        let cat = priced_catalog();
+        assert_eq!(
+            top_for(&cat, Fit::Cheap).unwrap().selector,
+            "anthropic/claude-text"
+        );
+        assert_eq!(
+            top_for(&cat, Fit::LongContext).unwrap().selector,
+            "anthropic/claude-opus-4"
+        );
+        // Vision → cheapest vision-capable (Haiku over Opus).
+        assert_eq!(
+            top_for(&cat, Fit::Vision).unwrap().selector,
+            "anthropic/claude-haiku"
+        );
+        // Reasoning → cheapest reasoning-capable (GPT-5 over Opus).
+        assert_eq!(
+            top_for(&cat, Fit::Reasoning).unwrap().selector,
+            "openai-codex/gpt-5"
+        );
+    }
+
+    #[test]
+    fn top_for_none_when_axis_unsatisfiable() {
+        let plain = vec![m("x/y", "Y")]; // no caps, no price/vision/etc.
+        assert!(top_for(&plain, Fit::Cheap).is_none());
+        assert!(top_for(&plain, Fit::Vision).is_none());
+    }
+
+    #[test]
+    fn price_tier_buckets_by_terciles() {
+        let cat = priced_catalog();
+        let cheap = m("anthropic/claude-text", "Text").with_caps(caps(1.0, 100_000, false, false));
+        let dear =
+            m("anthropic/claude-opus-4", "Opus").with_caps(caps(25.0, 1_000_000, true, true));
+        assert_eq!(price_tier(&cat, &cheap), PriceTier::Cheap);
+        assert_eq!(price_tier(&cat, &dear), PriceTier::Pricey);
+        // No price → Unknown.
+        assert_eq!(price_tier(&cat, &m("x/y", "Y")), PriceTier::Unknown);
     }
 }
