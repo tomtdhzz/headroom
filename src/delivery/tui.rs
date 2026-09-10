@@ -237,6 +237,8 @@ pub fn run(
     locale: Locale,
 ) -> Result<()> {
     let mut app = App::new(evaluator.poll()?, offset_secs, locale);
+    // Best-effort: show the currently pinned models in the gauges header too.
+    app.pins = switcher.pins().unwrap_or_default();
     let mut terminal = ratatui::init();
     let result = run_loop(&mut terminal, &mut app, evaluator, switcher, interval, auto);
     ratatui::restore();
@@ -284,7 +286,10 @@ fn handle_key(
     match app.mode {
         Mode::Gauges => match code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
-            KeyCode::Char('r') => app.set(evaluator.poll()?),
+            KeyCode::Char('r') => {
+                app.set(evaluator.poll()?);
+                app.pins = switcher.pins().unwrap_or_default();
+            }
             KeyCode::Char('l') => app.locale = app.locale.toggle(),
             KeyCode::Char('s') => app.enter_switch(switcher)?,
             KeyCode::Down | KeyCode::Char('j') => app.next(),
@@ -395,6 +400,7 @@ fn ui_switch(frame: &mut Frame, app: &App) {
     if app.sort_by_price {
         title.push_str(&format!("· {} ", loc.sort_label(true)));
     }
+    title.push_str(&format!("· {} ", loc.price_unit()));
     let node_lines = build_node_lines(app);
     let visible = right.height.saturating_sub(2) as usize; // minus borders
     let scroll = app
@@ -443,10 +449,11 @@ fn node_detail(app: &App) -> String {
     let Some(m) = filtered.get(app.node_idx - 1) else {
         return String::new();
     };
-    let mut parts = vec![
-        m.name.clone(),
-        loc.node_price(m.caps.cost_in, m.caps.cost_out),
-    ];
+    let mut price = loc.node_price(m.caps.cost_in, m.caps.cost_out);
+    if m.caps.price_key().is_some() {
+        price.push_str(&format!(" {}", loc.price_unit()));
+    }
+    let mut parts = vec![m.name.clone(), price];
     if let Some(ctx) = m.caps.context {
         parts.push(format!("{} {}", fmt_ctx(ctx), loc.ctx_label()));
     }
@@ -454,6 +461,24 @@ fn node_detail(app: &App) -> String {
     if !tags.is_empty() {
         parts.push(tags);
     }
+    // Scenario hint derived from real capabilities (not omp-declared use cases).
+    let mut scenes: Vec<&str> = Vec::new();
+    if m.caps.vision {
+        scenes.push(loc.scene_vision());
+    }
+    if m.caps.reasoning {
+        scenes.push(loc.scene_reason());
+    }
+    if m.caps.context.is_some_and(|c| c >= 400_000) {
+        scenes.push(loc.scene_long());
+    }
+    if matches!(price_tier(&app.models, m), PriceTier::Cheap) && !m.caps.reasoning {
+        scenes.push(loc.scene_light());
+    }
+    if scenes.is_empty() {
+        scenes.push(loc.scene_general());
+    }
+    parts.push(format!("{}: {}", loc.fit_prefix(), scenes.join("、")));
     parts.join(" · ")
 }
 
@@ -611,6 +636,29 @@ fn node_line(row: NodeRow) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The role→model pins that target `provider`, as a compact header label like
+/// `▸ pinned default:opus-4-8 · plan:…`, or `None` when nothing is pinned to it.
+fn provider_pins_label(app: &App, provider: &str) -> Option<String> {
+    let prefix = format!("{provider}/");
+    let items: Vec<String> = Role::ALL
+        .iter()
+        .filter_map(|&role| {
+            let sel = app.pins.get(role)?;
+            let short = sel.strip_prefix(&prefix)?;
+            Some(format!("{}:{}", role.key(), short))
+        })
+        .collect();
+    if items.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} {}",
+            app.locale.active_prefix(),
+            items.join(" · ")
+        ))
+    }
+}
+
 fn build_lines(app: &App, now: SystemTime) -> Vec<Line<'static>> {
     let loc = app.locale;
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -636,7 +684,7 @@ fn build_lines(app: &App, now: SystemTime) -> Vec<Line<'static>> {
             title_style = title_style.add_modifier(Modifier::REVERSED);
         }
 
-        lines.push(Line::from(vec![
+        let mut header = vec![
             Span::raw(if selected { "▶ " } else { "  " }),
             Span::styled(
                 display_name(snap.provider.as_str()).to_string(),
@@ -650,7 +698,14 @@ fn build_lines(app: &App, now: SystemTime) -> Vec<Line<'static>> {
                 snap.plan.as_deref().unwrap_or("-").to_string(),
                 Style::default().fg(Color::DarkGray),
             ),
-        ]));
+        ];
+        if let Some(pins) = provider_pins_label(app, snap.provider.as_str()) {
+            header.push(Span::styled(
+                format!("   {pins}"),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
+        lines.push(Line::from(header));
 
         for class in &account.classes {
             let hr = &class.headroom;
@@ -965,5 +1020,35 @@ mod tests {
         terminal.draw(|f| ui(f, &app)).unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("anthropic/claude-opus-4"));
+    }
+
+    #[test]
+    fn gauges_header_shows_pinned_model_for_provider() {
+        let mut app = App::new(
+            Assessment {
+                accounts: vec![account("anthropic", 72), account("openai-codex", 50)],
+            },
+            0,
+            Locale::En,
+        );
+        app.pins = RolePins::from_pairs([
+            (
+                "default".to_string(),
+                "anthropic/claude-opus-4-8".to_string(),
+            ),
+            ("smol".to_string(), "openai-codex/gpt-5.6-luna".to_string()),
+        ]);
+        let content: String = build_lines(&app, SystemTime::UNIX_EPOCH)
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The anthropic header carries its default pin (short selector, no prefix).
+        assert!(content.contains("default:claude-opus-4-8"));
+        // The codex header carries its smol pin, not anthropic's.
+        assert!(content.contains("smol:gpt-5.6-luna"));
+        // Pins are stripped of the provider prefix in the header.
+        assert!(!content.contains("default:anthropic/claude-opus-4-8"));
     }
 }

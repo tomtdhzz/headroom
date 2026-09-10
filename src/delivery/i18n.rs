@@ -273,6 +273,61 @@ impl Locale {
         }
     }
 
+    /// Price-unit legend for the nodes pane, e.g. `$ per 1M tokens`.
+    pub fn price_unit(self) -> &'static str {
+        match self {
+            Locale::En => "$/1M tok",
+            Locale::Zh => "$/百万token",
+        }
+    }
+
+    /// Prefix for the currently-pinned models shown in the gauges header.
+    pub fn active_prefix(self) -> &'static str {
+        match self {
+            Locale::En => "▸ pinned",
+            Locale::Zh => "▸ 在用",
+        }
+    }
+    /// "good for" prefix on a model's scenario hint.
+    pub fn fit_prefix(self) -> &'static str {
+        match self {
+            Locale::En => "good for",
+            Locale::Zh => "适合",
+        }
+    }
+
+    /// Scenario tags derived from real capabilities (not omp-declared use cases).
+    pub fn scene_vision(self) -> &'static str {
+        match self {
+            Locale::En => "screenshots",
+            Locale::Zh => "看图/截图",
+        }
+    }
+    pub fn scene_reason(self) -> &'static str {
+        match self {
+            Locale::En => "planning",
+            Locale::Zh => "推理/规划",
+        }
+    }
+    pub fn scene_long(self) -> &'static str {
+        match self {
+            Locale::En => "long files",
+            Locale::Zh => "长文/大仓库",
+        }
+    }
+    pub fn scene_light(self) -> &'static str {
+        match self {
+            Locale::En => "quick chat",
+            Locale::Zh => "日常/轻量",
+        }
+    }
+    pub fn scene_general(self) -> &'static str {
+        match self {
+            Locale::En => "general",
+            Locale::Zh => "通用",
+        }
+    }
+
     /// Human-readable reason for an alert.
     pub fn alert_reason(self, a: &Alert) -> String {
         let subject = &a.subject;

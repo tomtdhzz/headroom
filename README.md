@@ -174,10 +174,13 @@ and the `◎ Auto` row clears the pin (the URLTest analog — hand it back to om
 **See cost and fit while switching.** In the TUI switch pane each node shows its
 **price** (output $/M tokens; green=cheap, gray=mid, magenta=pricey) and
 capability tags (`👁` reads images, `🧠` reasoning); the highlighted node's full
-price (in/out) and context size appear below, and a **recommendation** line
-suggests the best model per task axis — `💡 cheapest / vision / reasoning /
-long-ctx` — all computed from real `omp models` fields. Press `t` to sort by
-price so the cheaper escape model surfaces on a quota alert.
+price (in/out, unit `$/1M tokens`), context size, and a capability-derived
+**scenario hint** (`good for: screenshots, planning, long files, quick chat`)
+appear below, and a **recommendation** line suggests the best model per task axis
+— `💡 cheapest / vision / reasoning / long-ctx` — all from real `omp models`
+fields. Press `t` to sort by price so the cheaper escape model surfaces on a
+quota alert. The **gauges view** also shows each provider's pinned model in its
+header (`▸ pinned default:opus-4-8`).
 
 > Note: the price is omp's **API list price** ($/M tokens) — a *relative* cost
 > signal. On a subscription, switching models produces no dollar bill; real quota
