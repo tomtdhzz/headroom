@@ -4,12 +4,14 @@
 //! JSON, files, or terminals — those live in `adapters`/`delivery`.
 
 pub mod alert;
+pub mod control;
 pub mod forecast;
 pub mod headroom;
 pub mod model;
 pub mod window;
 
 pub use alert::{evaluate, Alert, AlertKind, AlertLevel, Suggestion, Thresholds};
+pub use control::{resolve_model, ModelRef, Resolve, Role, RolePins};
 pub use forecast::{BurnRate, ExhaustionForecast, Sample};
 pub use headroom::Headroom;
 pub use model::{AccountId, ModelClass, Percent, ProviderId, Tier};

@@ -8,21 +8,28 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 
 use headroom::adapters::{
-    local_utc_offset_seconds, CliNotifier, FileHistoryStore, OmpUsageSource, Recovered, SystemClock,
+    local_utc_offset_seconds, CliNotifier, FileHistoryStore, OmpModelControl, OmpUsageSource,
+    Recovered, SystemClock,
 };
 use headroom::app::ports::Clock;
-use headroom::app::Evaluator;
+use headroom::app::{Evaluator, Outcome, Switcher};
 use headroom::delivery::cli::{render, Palette};
+use headroom::delivery::switch::{render_outcome, render_roles};
 use headroom::delivery::Locale;
-use headroom::domain::{Alert, AlertLevel, Thresholds};
+use headroom::domain::{Alert, AlertLevel, Role, Thresholds};
 
 const HELP: &str = "\
 headroom — per-model quota headroom for AI coding subscriptions (via omp)
 
 USAGE:
-    headroom [OPTIONS]
-    headroom watch [OPTIONS]
-    headroom tui [OPTIONS]
+    headroom [OPTIONS]                 One-shot per-model headroom + alerts
+    headroom watch [OPTIONS]           Poll on an interval, notify on change
+    headroom tui [OPTIONS]             Interactive TUI (press `s` for switch pane)
+    headroom roles                     Show role→model pins (the policy groups)
+    headroom use <role> <model>        Pin a role to a model (fuzzy match)
+    headroom clear <role>              Clear a role's pin (back to omp default)
+
+ROLES: default · plan · slow · smol · advisor
 
 OPTIONS:
     --provider <id>     Limit to one provider (e.g. anthropic, openai-codex)
@@ -34,16 +41,29 @@ OPTIONS:
     --lang <zh|en>      Display language (default: auto-detect from locale)
     -h, --help          Print this help
 
-Reads `omp usage --json --redact`; never modifies omp config (read-only).
+Monitoring reads `omp usage --json --redact` (read-only). Switching writes omp
+`modelRoles` only on explicit `use`/`clear` or a TUI apply, verified by read-back.
 ";
+
+/// The selected subcommand.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cmd {
+    Show,
+    Watch,
+    Tui,
+    Roles,
+    Use,
+    Clear,
+}
 
 struct Args {
     provider: Option<String>,
     warn: u8,
     critical: u8,
     interval: u64,
-    watch: bool,
-    tui: bool,
+    cmd: Cmd,
+    role: Option<String>,
+    query: Option<String>,
     desktop: bool,
     color: Option<bool>,
     lang: Option<Locale>,
@@ -56,8 +76,9 @@ impl Default for Args {
             warn: 20,
             critical: 5,
             interval: 60,
-            watch: false,
-            tui: false,
+            cmd: Cmd::Show,
+            role: None,
+            query: None,
             desktop: true,
             color: None,
             lang: None,
@@ -71,8 +92,18 @@ fn parse_args() -> Result<Option<Args>> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-h" | "--help" => return Ok(None),
-            "watch" => args.watch = true,
-            "tui" => args.tui = true,
+            "watch" => args.cmd = Cmd::Watch,
+            "tui" => args.cmd = Cmd::Tui,
+            "roles" => args.cmd = Cmd::Roles,
+            "use" => {
+                args.cmd = Cmd::Use;
+                args.role = Some(next_value(&mut it, "use <role>")?);
+                args.query = Some(next_value(&mut it, "use <role> <model>")?);
+            }
+            "clear" => {
+                args.cmd = Cmd::Clear;
+                args.role = Some(next_value(&mut it, "clear <role>")?);
+            }
             "--provider" => args.provider = Some(next_value(&mut it, "--provider")?),
             "--warn" => args.warn = parse_pct(&next_value(&mut it, "--warn")?, "--warn")?,
             "--critical" => {
@@ -136,11 +167,40 @@ fn run() -> Result<()> {
         return Ok(());
     };
 
+    let offset_secs = local_utc_offset_seconds();
+    let locale = args.lang.unwrap_or_else(Locale::detect);
+
+    // Control plane (switch commands + TUI switch pane). Constructing it makes
+    // no calls; nothing is written until an explicit `use`/`clear`/apply.
+    let control = OmpModelControl::new();
+    let switcher = Switcher::new(&control);
+
+    match args.cmd {
+        Cmd::Roles => {
+            print!("{}", render_roles(&switcher.pins()?, locale));
+            return Ok(());
+        }
+        Cmd::Use => {
+            let role = parse_role(args.role.as_deref().unwrap_or(""))?;
+            let outcome = switcher.pin(role, args.query.as_deref().unwrap_or(""))?;
+            println!("{}", render_outcome(&outcome, locale));
+            if matches!(outcome, Outcome::NoMatch { .. } | Outcome::Ambiguous { .. }) {
+                return Err(anyhow::anyhow!("no unique model selected"));
+            }
+            return Ok(());
+        }
+        Cmd::Clear => {
+            let role = parse_role(args.role.as_deref().unwrap_or(""))?;
+            let outcome = switcher.clear(role)?;
+            println!("{}", render_outcome(&outcome, locale));
+            return Ok(());
+        }
+        Cmd::Show | Cmd::Watch | Cmd::Tui => {}
+    }
+
     let source = OmpUsageSource::new(args.provider.clone());
     let history = FileHistoryStore::new()?;
     let clock = SystemClock;
-    let offset_secs = local_utc_offset_seconds();
-    let locale = args.lang.unwrap_or_else(Locale::detect);
     let notifier = CliNotifier::new(args.desktop, offset_secs, locale);
     let thresholds = Thresholds {
         warn_pct: args.warn,
@@ -154,9 +214,10 @@ fn run() -> Result<()> {
         None => Palette::auto(),
     };
 
-    if args.tui {
+    if args.cmd == Cmd::Tui {
         headroom::delivery::tui::run(
             &evaluator,
+            &switcher,
             Duration::from_secs(args.interval),
             true,
             offset_secs,
@@ -165,7 +226,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    if args.watch {
+    if args.cmd == Cmd::Watch {
         let mut state = WatchState::default();
         loop {
             run_once(
@@ -191,6 +252,13 @@ fn run() -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// Parse a role token, mapping failures to an actionable error.
+fn parse_role(s: &str) -> Result<Role> {
+    Role::parse(s).ok_or_else(|| {
+        anyhow::anyhow!("unknown role `{s}` (expected default|plan|slow|smol|advisor)")
+    })
 }
 
 /// Cross-poll watch state: suppressed alert signatures, plus the critical

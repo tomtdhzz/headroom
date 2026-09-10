@@ -16,9 +16,12 @@ computes the *binding minimum* per model class — so a depleted Opus/Fable week
 cap doesn't make you think the whole account is dead when Sonnet still has hours
 left.
 
-`headroom` is **read-only**: it never changes your `omp` config or switches
-anything. It observes, forecasts, and alerts. (Auto-switching is a deliberate
-non-goal for v0 — see [Limitations](#limitations).)
+`headroom`'s **monitoring is read-only**: it never touches your `omp` config
+while observing, forecasting, and alerting. It also ships an **opt-in switcher**
+(Clash-style "policy groups") to manually pin roles to models — the one action
+that writes config, and only to `modelRoles`, verified by read-back (see
+[Switching](#switching-models--platforms)). Auto-switching remains a non-goal
+(see [Limitations](#limitations)).
 
 ![headroom — interactive TUI (中文; press `l` to toggle 中/EN)](docs/assets/tui-zh.png)
 
@@ -132,12 +135,38 @@ headroom --warn 25 --critical 8
 # Watch: poll on an interval; alert only on newly appeared/escalated conditions
 headroom watch --interval 60
 
-# Interactive TUI: bar gauges, ↑↓/jk select, r refresh, l 中/EN, q quit
+# Interactive TUI: bar gauges, ↑↓/jk select, r refresh, l 中/EN, q quit;
+# press s for the "policy group" switch pane
 headroom tui --interval 60
 
 # Chinese display (auto-detected from locale; force with --lang)
 headroom --lang zh
 ```
+
+### Switching models / platforms
+
+Treat omp's roles (`default`/`plan`/`slow`/`smol`/`advisor`) as Clash "policy
+groups" and concrete models as "nodes", then pin them manually:
+
+```bash
+# Show which model each role is pinned to (unset = auto, omp chooses)
+headroom roles
+
+# Pin a role to a model (fuzzy match; a non-unique query lists candidates,
+# errors, and writes nothing)
+headroom use default anthropic/claude-opus-4-8
+headroom use smol   haiku
+
+# Clear a pin, back to omp's default
+headroom clear default
+```
+
+`use` / `clear` (and the TUI "apply") are the **only** actions that write
+config: they touch omp's `modelRoles` and only that, and verify by read-back.
+A switch takes effect on the **next omp session** (same as cc-switch; it never
+disturbs a running one). In the TUI switch pane, each node's color reflects that
+provider's **live headroom** (green/yellow/red), the current pin is marked `●`,
+and the `◎ Auto` row clears the pin (the URLTest analog — hand it back to omp).
 
 Options:
 
@@ -206,9 +235,11 @@ cargo fmt --check
 
 ## Limitations
 
-- **Read-only.** v0 observes and alerts; it does not auto-switch models/accounts.
-  Acting on alerts (generating `omp` `modelRoles` / `retry.fallbackChains`, or
-  enabling `usageAwareFallback`) is planned for v1.
+- **Monitoring is read-only; switching is explicit.** Observing and alerting
+  never write config. Manual switching (`use`/`clear` or a TUI apply) is the only
+  write path — opt-in, verified by read-back, effective next session, touching
+  only omp's `modelRoles`. It still does **not** auto-switch (use omp's native
+  `retry.usageAwareFallback` / `fallbackChains` for at-the-wall downgrade).
 - **Tier granularity.** `omp` exposes usage per tier, not per exact model, so
   headroom is computed per tier/class. Per-model attribution inside a shared pool
   (e.g. Sonnet vs. Haiku) needs session accounting — planned for v2.
@@ -221,13 +252,14 @@ cargo fmt --check
   falls across a daylight-saving boundary within the horizon may be off by an
   hour; the relative countdown (`↺`) is always exact.
 
-## Roadmap
+The core stays honest: monitoring read-only, switching explicit and verified.
 
-Deferred by design; tracked so the read-only core stays honest.
-
-- **v1 — act on alerts (on hold).** Turn a suggestion into action: generate/patch
-  omp `modelRoles` and `retry.fallbackChains`, and optionally enable
-  `retry.usageAwareFallback` for request-time downgrade. Opt-in, never silent.
+- **v1 — manual switching (shipped).** Clash "policy group"-style role→model
+  pinning: `headroom roles` / `use` / `clear` and the TUI `s` switch pane, writing
+  omp `modelRoles` with read-back verification.
+- **Next — one-key actionable alerts.** Offer a "switch to the suggested model"
+  action right next to an alert; optionally enable omp's
+  `retry.usageAwareFallback` for request-time downgrade.
 - **v2 — per-exact-model attribution.** Break shared-pool burn down to individual
   models (e.g. Sonnet vs. Haiku) via omp session accounting.
 - **v2 — pooled multi-account capacity view** using omp's `capacity` block.

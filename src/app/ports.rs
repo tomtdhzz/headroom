@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 
-use crate::domain::{AccountId, Alert, ProviderId, QuotaSnapshot, Sample};
+use crate::domain::{AccountId, Alert, ModelRef, ProviderId, QuotaSnapshot, RolePins, Sample};
 
 /// Reads current quota snapshots for every authenticated account.
 pub trait UsageSource {
@@ -35,4 +35,19 @@ pub trait Notifier {
 /// The current wall-clock time (injected for testability).
 pub trait Clock {
     fn now(&self) -> SystemTime;
+}
+
+/// The switch/control plane: reads the model catalog and current role pins, and
+/// applies pin changes. Implementations are expected to write through to the
+/// underlying tool (e.g. `omp config set modelRoles`) and verify by read-back.
+pub trait ModelControl {
+    /// Every model the tool can route to, for building the policy-group view.
+    fn available_models(&self) -> Result<Vec<ModelRef>>;
+
+    /// The current role→selector assignments.
+    fn pins(&self) -> Result<RolePins>;
+
+    /// Persist `pins` (full record) and return the verified read-back. Errors
+    /// if the write did not take effect.
+    fn write_pins(&self, pins: &RolePins) -> Result<RolePins>;
 }

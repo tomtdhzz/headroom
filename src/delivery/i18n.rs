@@ -1,6 +1,6 @@
 //! Presentation-layer localization. Language lives here, never in the domain.
 
-use crate::domain::{human_duration, Alert, AlertKind, AlertLevel};
+use crate::domain::{human_duration, Alert, AlertKind, AlertLevel, Role};
 
 use super::ResetWhen;
 
@@ -79,8 +79,116 @@ impl Locale {
 
     pub fn tui_footer(self) -> &'static str {
         match self {
-            Locale::En => " ↑↓/jk select · r refresh · l 中/EN · q quit",
-            Locale::Zh => " ↑↓/jk 选择 · r 刷新 · l 中/EN · q 退出",
+            Locale::En => " ↑↓/jk select · s switch · r refresh · l 中/EN · q quit",
+            Locale::Zh => " ↑↓/jk 选择 · s 切换 · r 刷新 · l 中/EN · q 退出",
+        }
+    }
+
+    /// Localized name for an omp role (the "策略组").
+    pub fn role_label(self, role: Role) -> &'static str {
+        match (self, role) {
+            (Locale::En, Role::Default) => "Default",
+            (Locale::En, Role::Plan) => "Plan",
+            (Locale::En, Role::Slow) => "Slow",
+            (Locale::En, Role::Smol) => "Smol",
+            (Locale::En, Role::Advisor) => "Advisor",
+            (Locale::Zh, Role::Default) => "默认",
+            (Locale::Zh, Role::Plan) => "规划",
+            (Locale::Zh, Role::Slow) => "深思",
+            (Locale::Zh, Role::Smol) => "轻快",
+            (Locale::Zh, Role::Advisor) => "顾问",
+        }
+    }
+
+    /// One-line hint for a role's purpose (shown in the policy-group pane).
+    pub fn role_hint(self, role: Role) -> &'static str {
+        match (self, role) {
+            (Locale::En, Role::Default) => "primary interactive model",
+            (Locale::En, Role::Plan) => "architectural planning (--plan)",
+            (Locale::En, Role::Slow) => "thorough reasoning (--slow)",
+            (Locale::En, Role::Smol) => "fast/cheap tasks (--smol)",
+            (Locale::En, Role::Advisor) => "passive reviewer (advisor)",
+            (Locale::Zh, Role::Default) => "主力交互模型",
+            (Locale::Zh, Role::Plan) => "架构规划(--plan)",
+            (Locale::Zh, Role::Slow) => "深度推理(--slow)",
+            (Locale::Zh, Role::Smol) => "轻量快速任务(--smol)",
+            (Locale::Zh, Role::Advisor) => "被动复审(顾问)",
+        }
+    }
+
+    /// Pseudo-node meaning "clear the pin, let omp choose" (the URLTest analog).
+    pub fn auto_node(self) -> &'static str {
+        match self {
+            Locale::En => "◎ Auto (let omp choose)",
+            Locale::Zh => "◎ 自动(交由 omp)",
+        }
+    }
+
+    /// Column heading for the policy-group (roles) pane.
+    pub fn groups_heading(self) -> &'static str {
+        match self {
+            Locale::En => "policy groups",
+            Locale::Zh => "策略组",
+        }
+    }
+
+    /// Column heading for the candidate-nodes (models) pane.
+    pub fn nodes_heading(self) -> &'static str {
+        match self {
+            Locale::En => "models",
+            Locale::Zh => "模型节点",
+        }
+    }
+
+    /// Label for an unset role pin.
+    pub fn unset(self) -> &'static str {
+        match self {
+            Locale::En => "auto",
+            Locale::Zh => "自动",
+        }
+    }
+
+    /// Footer for the interactive switch pane.
+    pub fn switch_footer(self) -> &'static str {
+        match self {
+            Locale::En => {
+                " ↑↓/jk model · ←→/Tab role · / filter · ⏎ apply · c clear · g back · q quit"
+            }
+            Locale::Zh => {
+                " ↑↓/jk 模型 · ←→/Tab 策略组 · / 过滤 · ⏎ 应用 · c 清除 · g 返回 · q 退出"
+            }
+        }
+    }
+
+    /// Status line after a successful pin.
+    pub fn switched(self, role: Role, selector: &str) -> String {
+        match self {
+            Locale::En => format!("✔ pinned {} → {selector}", self.role_label(role)),
+            Locale::Zh => format!("✔ 已把「{}」钉到 {selector}", self.role_label(role)),
+        }
+    }
+
+    /// Status line after clearing a pin.
+    pub fn cleared(self, role: Role) -> String {
+        match self {
+            Locale::En => format!("✔ cleared {} (auto)", self.role_label(role)),
+            Locale::Zh => format!("✔ 已清除「{}」(自动)", self.role_label(role)),
+        }
+    }
+
+    /// Status line for a query that matched nothing.
+    pub fn no_match(self, query: &str) -> String {
+        match self {
+            Locale::En => format!("no model matches `{query}`"),
+            Locale::Zh => format!("没有匹配 `{query}` 的模型"),
+        }
+    }
+
+    /// Status line for an ambiguous query.
+    pub fn ambiguous(self, query: &str, n: usize) -> String {
+        match self {
+            Locale::En => format!("`{query}` matches {n} models — be more specific"),
+            Locale::Zh => format!("`{query}` 匹配到 {n} 个模型 —— 请更精确"),
         }
     }
 

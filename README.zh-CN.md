@@ -10,7 +10,7 @@
 
 它通过 [`omp`](https://github.com/can1357/oh-my-pi) 读取用量,按窗口的 **scope**(所有模型共享 vs. 某档专属)建模,算出每个模型档位的**约束最小值(binding minimum)**——于是 Opus/Fable 的周额度见底时,你不会误以为整个账号没了,而 Sonnet 其实还能用好几个小时。
 
-`headroom` 是**只读**的:它绝不修改你的 `omp` 配置、也不做任何切换。它只负责观测、预测、告警。(自动切换是 v0 刻意的非目标,见[局限](#局限)。)
+`headroom` 的**监控是只读**的:观测、预测、告警时绝不碰你的 `omp` 配置。它另带一个 **opt-in 的切换器**(Clash「策略组」式),让你手动把角色钉到模型——这是唯一会写配置的动作,只改 `modelRoles` 且写后回读校验(见[手动切换](#手动切换模型--平台策略组))。仍不做自动切换(见[局限](#局限))。
 
 ![headroom — 交互式 TUI(中文;按 `l` 切换 中/EN)](docs/assets/tui-zh.png)
 
@@ -106,12 +106,30 @@ headroom --warn 25 --critical 8
 # watch:按间隔轮询,只在新出现/升级的情况才提醒
 headroom watch --interval 60
 
-# 交互式 TUI:条形 gauge、↑↓/jk 选择、r 刷新、l 中/EN、q 退出
+# 交互式 TUI:条形 gauge、↑↓/jk 选择、r 刷新、l 中/EN、q 退出;按 s 进入「策略组」切换面板
 headroom tui --interval 60
 
 # 中文显示(默认按系统 locale 自动;也可用 --lang 强制)
 headroom --lang zh
 ```
+
+### 手动切换模型 / 平台(策略组)
+
+把 omp 的角色(`default`/`plan`/`slow`/`smol`/`advisor`)当作 Clash 的「策略组」,把具体模型当作「节点」,手动钉选:
+
+```bash
+# 查看每个角色当前钉到哪个模型(未钉 = auto,交由 omp 选)
+headroom roles
+
+# 把某角色钉到某模型(模糊匹配;不唯一会列出候选并报错、不写入)
+headroom use default anthropic/claude-opus-4-8
+headroom use smol   haiku
+
+# 清除钉选,恢复 omp 默认
+headroom clear default
+```
+
+`use` / `clear` 与 TUI 里的「应用」是 headroom **唯一**会写配置的动作:它只改写 omp 的 `modelRoles`,并在写后**回读校验**;切换在**下一个 omp 会话**生效(与 cc-switch 一致,不影响正在跑的会话)。TUI 的策略组面板里,每个节点旁的颜色来自该 provider 的**实时余量**(绿/黄/红),当前钉选用 `●` 标注,`◎ 自动` 一行等价于清除钉选(URLTest 式交给 omp)。
 
 选项:
 
@@ -168,7 +186,7 @@ cargo fmt --check
 
 ## 局限
 
-- **只读。** v0 只观测与告警,不自动切换模型/账号。把建议变成动作(生成 `omp` `modelRoles` / `retry.fallbackChains`,或开启 `usageAwareFallback`)计划放在 v1。
+- **监控只读;切换需显式操作。** 观测与告警从不写配置。手动切换(`use`/`clear` 或 TUI 应用)是唯一的写路径,只改写 omp 的 `modelRoles`,opt-in、写后回读校验、下一个会话生效。仍**不做**自动切换(撞墙自动降级用 omp 原生的 `retry.usageAwareFallback` / `fallbackChains`)。
 - **档位粒度。** `omp` 暴露到档位(tier)而非具体型号,所以余量按档位计算。共享池内的型号级归因(如 Sonnet vs. Haiku)需要会话记账,计划 v2。
 - **预测需要历史。** ETA 要在 ≥2 个不同采样后才出现;单次读数显示 `—`。
 - **窗口可能变化。** provider 的限额结构经常调整;`scope` 驱动的映射避免了硬编码档位,但新形态可能需要更新解析器。
@@ -176,9 +194,10 @@ cargo fmt --check
 
 ## 路线图
 
-刻意搁置的项,记录在案以保持只读内核的诚实。
+核心保持诚实:监控只读,切换显式且经校验。
 
-- **v1 —— 让告警可执行(搁置中)。** 把建议变成动作:生成/修补 omp `modelRoles` 与 `retry.fallbackChains`,可选开启 `retry.usageAwareFallback` 做请求前降级。opt-in,绝不静默。
+- **v1 —— 手动切换(已交付)。** Clash 「策略组」式的角色→模型钉选:`headroom roles` / `use` / `clear` 与 TUI 的 `s` 切换面板,写 omp `modelRoles` 并回读校验。
+- **未来 —— 让告警一键可执行。** 在告警旁直接给出「切到建议模型」的动作;可选开启 omp 的 `retry.usageAwareFallback` 做请求前降级。
 - **v2 —— 型号级归因。** 用 omp 会话记账把共享池消耗拆到具体型号(如 Sonnet vs. Haiku)。
 - **v2 —— 多账号池化容量视图**,使用 omp 的 `capacity` 块。
 - **也许 —— 绝对值 `≈Nk` 估算**,基于用户提供的每窗口预算(omp 目前只给百分比,任何绝对值都是显式估算)。

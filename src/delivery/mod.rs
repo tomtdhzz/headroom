@@ -4,6 +4,7 @@
 
 pub mod cli;
 pub mod i18n;
+pub mod switch;
 pub mod tui;
 
 pub use i18n::Locale;
@@ -39,6 +40,32 @@ pub(crate) fn worst_of(a: Sev, b: Sev) -> Sev {
         (Sev::Warn, _) | (_, Sev::Warn) => Sev::Warn,
         _ => Sev::Ok,
     }
+}
+
+/// Worst rendering severity across a provider's accounts in the assessment, or
+/// `None` when the provider reports no usage (e.g. a catalog-only provider).
+/// Used to give each switch "节点" a Clash-like health color from real quota.
+pub(crate) fn provider_severity(
+    assessment: &crate::app::evaluate::Assessment,
+    provider: &str,
+) -> Option<Sev> {
+    let mut sev: Option<Sev> = None;
+    for account in &assessment.accounts {
+        if account.snapshot.provider.as_str() != provider {
+            continue;
+        }
+        for class in &account.classes {
+            let s = severity(
+                class.headroom.effective_remaining.get(),
+                class.headroom.available,
+            );
+            sev = Some(match sev {
+                Some(prev) => worst_of(prev, s),
+                None => s,
+            });
+        }
+    }
+    sev
 }
 
 /// The number of filled cells for a given remaining percentage.
